@@ -16,3 +16,11 @@ In `experts/`, the provided expert policies are:
 * Walker2d-v1.pkl
 
 The name of the pickle file corresponds to the name of the gym environment.
+
+## Result Notes
+- it was a little counter intuitive but I had to reduce the number of layers and the hidden size to get BC to start working. On the Hopper-v1 task, it seems like you can overfit quite easily and perform badly at test time.
+- Adam worked significantly better than SGD, although you still had to tune the learning rate
+- intermediate batch size ~100 is good
+- it was obviously much easier to learn Hopper than Humanoid since Humanoid has much larger state and action spaces
+- Humanoid is still learnable but you need: more samples, larger neural network, DAgger
+- You can learn Humanoid with just BC but it seems to have a large variance in the reward. Either the agent does perfectly or it fails immediately. Training using DAgger stabilizes the agent, most likely because seeing samples from its own policy helps it learn to recover.
