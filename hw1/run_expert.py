@@ -68,5 +68,7 @@ def main():
         expert_data = {'observations': np.array(observations),
                        'actions': np.array(actions)}
 
+        pickle.dump(expert_data, open('./data/{}.p'.format(args.envname), 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
+
 if __name__ == '__main__':
     main()
