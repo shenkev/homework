@@ -1,19 +1,90 @@
 import sys
 import gym.spaces
 import itertools
-import numpy as np
 import random
+import numpy as np
 import tensorflow                as tf
-import tensorflow.contrib.layers as layers
+import torch
+import torch.nn as nn
+import math
+
+sys.path.append("./../")
+from logger import Logger
+
 from collections import namedtuple
 from dqn_utils import *
 
 OptimizerSpec = namedtuple("OptimizerSpec", ["constructor", "kwargs", "lr_schedule"])
 
+
+# def atari_model(img_in, num_actions, scope, reuse=False):
+#     # as described in https://storage.googleapis.com/deepmind-data/assets/papers/DeepMindNature14236Paper.pdf
+#     with tf.variable_scope(scope, reuse=reuse):
+#         out = img_in
+#         with tf.variable_scope("convnet"):
+#             # original architecture
+#             out = layers.convolution2d(out, num_outputs=32, kernel_size=8, stride=4, activation_fn=tf.nn.relu)
+#             out = layers.convolution2d(out, num_outputs=64, kernel_size=4, stride=2, activation_fn=tf.nn.relu)
+#             out = layers.convolution2d(out, num_outputs=64, kernel_size=3, stride=1, activation_fn=tf.nn.relu)
+#         out = layers.flatten(out)
+#         with tf.variable_scope("action_value"):
+#             out = layers.fully_connected(out, num_outputs=512,         activation_fn=tf.nn.relu)
+#             out = layers.fully_connected(out, num_outputs=num_actions, activation_fn=None)
+#
+#         return out
+
+def conv_block(in_chan, out_chan, k_size, stride, pad, opts):
+    block = nn.Sequential()
+    block.add_module('conv_1', nn.Conv2d(in_chan, out_chan, kernel_size=k_size, stride=stride, padding=pad))
+
+    if opts['bn']:
+        block.add_module('bn_1', nn.BatchNorm2d(out_chan))
+
+    block.add_module('relu_1', nn.ReLU())
+
+    if opts['mp']:
+        block.add_module('mp_1', nn.MaxPool2d(kernel_size=2, stride=2))
+
+    return block
+
+
+class Q_model(nn.Module):
+
+    def __init__(self, input_shape, output_size, args):
+
+        super(Q_model, self).__init__()
+
+        self.height, self.width, self.chans = input_shape
+        self.output_size = output_size
+        self.opts = {
+            'bn': args.batch_norm,
+            'mp': args.max_pool
+        }
+
+        self.layer1 = conv_block(self.chans, 32, 8, 4, 2, self.opts)
+        self.layer2 = conv_block(32, 64, 4, 2, 2, self.opts)
+        self.layer3 = conv_block(64, 64, 3, 1, 1, self.opts)
+
+        final_width = math.ceil(self.height/math.ceil(4*2*1))
+        self.fc1 = nn.Linear(final_width*final_width*64, 512)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Linear(512, self.output_size)
+
+    def forward(self, x):
+
+        z = self.layer1(x)
+        z = self.layer2(z)
+        z = self.layer3(z)
+        z = z.reshape(z.size(0), -1)
+        z = self.fc1(z)
+        z = self.relu1(z)
+        out = self.fc2(z)
+        return out
+
+
 def learn(env,
-          q_func,
-          optimizer_spec,
-          session,
+          args,
+          lr_schedule,
           exploration=LinearSchedule(1000000, 0.1),
           stopping_criterion=None,
           replay_buffer_size=1000000,
@@ -77,6 +148,8 @@ def learn(env,
     assert type(env.observation_space) == gym.spaces.Box
     assert type(env.action_space)      == gym.spaces.Discrete
 
+    logger = Logger('./logs/' + 'default')
+
     ###############
     # BUILD MODEL #
     ###############
@@ -89,25 +162,16 @@ def learn(env,
         input_shape = (img_h, img_w, frame_history_len * img_c)
     num_actions = env.action_space.n
 
-    # set up placeholders
-    # placeholder for current observation (or state)
-    obs_t_ph              = tf.placeholder(tf.uint8, [None] + list(input_shape))
-    # placeholder for current action
-    act_t_ph              = tf.placeholder(tf.int32,   [None])
-    # placeholder for current reward
-    rew_t_ph              = tf.placeholder(tf.float32, [None])
-    # placeholder for next observation (or state)
-    obs_tp1_ph            = tf.placeholder(tf.uint8, [None] + list(input_shape))
-    # placeholder for end of episode mask
-    # this value is 1 if the next state corresponds to the end of an episode,
-    # in which case there is no Q-value at the next state; at the end of an
-    # episode, only the current state reward contributes to the target, not the
-    # next state Q-value (i.e. target is just rew_t_ph, not rew_t_ph + gamma * q_tp1)
-    done_mask_ph          = tf.placeholder(tf.float32, [None])
+    Q_net = Q_model(input_shape, num_actions, args)
+    target_net = Q_model(input_shape, num_actions, args)
 
-    # casting to float on GPU ensures lower data transfer times.
-    obs_t_float   = tf.cast(obs_t_ph,   tf.float32) / 255.0
-    obs_tp1_float = tf.cast(obs_tp1_ph, tf.float32) / 255.0
+    if torch.cuda.is_available():
+        Q_net.cuda()
+        target_net.cuda()
+
+    target_net.load_state_dict(Q_net.state_dict())
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, Q_net.parameters()), lr=lr_schedule.value(0), eps=1e-4)
+    loss_fnc = torch.nn.SmoothL1Loss()
 
     # Here, you should fill in your own code to compute the Bellman error. This requires
     # evaluating the current and next Q-values and constructing the corresponding error.
@@ -126,23 +190,13 @@ def learn(env,
     # q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='q_func')
     # Older versions of TensorFlow may require using "VARIABLES" instead of "GLOBAL_VARIABLES"
     ######
-    
-    # YOUR CODE HERE
 
-    ######
-
-    # construct optimization op (with gradient clipping)
-    learning_rate = tf.placeholder(tf.float32, (), name="learning_rate")
-    optimizer = optimizer_spec.constructor(learning_rate=learning_rate, **optimizer_spec.kwargs)
-    train_fn = minimize_and_clip(optimizer, total_error,
-                 var_list=q_func_vars, clip_val=grad_norm_clipping)
-
-    # update_target_fn will be called periodically to copy Q network to target Q network
-    update_target_fn = []
-    for var, var_target in zip(sorted(q_func_vars,        key=lambda v: v.name),
-                               sorted(target_q_func_vars, key=lambda v: v.name)):
-        update_target_fn.append(var_target.assign(var))
-    update_target_fn = tf.group(*update_target_fn)
+    # # update_target_fn will be called periodically to copy Q network to target Q network
+    # update_target_fn = []
+    # for var, var_target in zip(sorted(q_func_vars,        key=lambda v: v.name),
+    #                            sorted(target_q_func_vars, key=lambda v: v.name)):
+    #     update_target_fn.append(var_target.assign(var))
+    # update_target_fn = tf.group(*update_target_fn)
 
     # construct the replay buffer
     replay_buffer = ReplayBuffer(replay_buffer_size, frame_history_len)
@@ -150,7 +204,6 @@ def learn(env,
     ###############
     # RUN ENV     #
     ###############
-    model_initialized = False
     num_param_updates = 0
     mean_episode_reward      = -float('nan')
     best_mean_episode_reward = -float('inf')
@@ -193,8 +246,25 @@ def learn(env,
         # might as well be random, since you haven't trained your net...)
 
         #####
-        
-        # YOUR CODE HERE
+
+        idx = replay_buffer.store_frame(last_obs)
+
+        if random.random() < exploration.value(t):
+            action = random.randint(0, num_actions-1)
+        else:
+            state = replay_buffer.encode_recent_observation()
+            state = to_var(torch.from_numpy(state).float()/255.0).permute(2, 0, 1).unsqueeze(0)
+            actions = Q_net(state)
+            q_value, q_idx = torch.max(actions, dim=1)
+            action = to_np(q_idx)[0]
+
+        obs, reward, done, info = env.step(action)
+        replay_buffer.store_effect(idx, action, reward, done)
+
+        if done:
+            last_obs = env.reset()
+        else:
+            last_obs = obs
 
         #####
 
@@ -243,10 +313,35 @@ def learn(env,
             # you should update every target_update_freq steps, and you may find the
             # variable num_param_updates useful for this (it was initialized to 0)
             #####
-            
-            # YOUR CODE HERE
 
-            #####
+            # 3.a sample a batch of transitions
+            obs, act, rew, next_obs, done_mask = replay_buffer.sample(batch_size)
+            obs, next_obs = [(torch.from_numpy(x).float()/255.0).permute(0, 3, 1, 2) for x in [obs, next_obs]]
+            act, rew, done_mask = [torch.from_numpy(x) for x in [act, rew, done_mask]]
+            obs, next_obs, act, rew, done_mask = [to_var(x) for x in [obs, next_obs, act, rew, done_mask]]
+
+            # 3.c train the model
+            set_lr(optimizer, lr_schedule.value(t))
+            optimizer.zero_grad()
+
+            pred_q = Q_net(obs)
+            pred_q_a = pred_q.gather(1, act.long().unsqueeze(1)).squeeze(1)
+
+            target_q = target_net(next_obs)
+            target_q_a, _ = torch.max(target_q, dim=1)
+            target = rew + (1-done_mask)*gamma*target_q_a
+            target = target.detach()
+
+            loss = loss_fnc(pred_q_a, target)
+            loss.backward()
+            gradient_noise_and_clip(Q_net.parameters(), grad_norm_clipping)
+            optimizer.step()
+            num_param_updates += 1
+
+            # 3.d update target network
+            if num_param_updates % target_update_freq == 0:
+                # copy over weights from Q-net to target-net
+                target_net.load_state_dict(Q_net.state_dict())
 
         ### 4. Log progress
         episode_rewards = get_wrapper_by_name(env, "Monitor").get_episode_rewards()
@@ -254,11 +349,16 @@ def learn(env,
             mean_episode_reward = np.mean(episode_rewards[-100:])
         if len(episode_rewards) > 100:
             best_mean_episode_reward = max(best_mean_episode_reward, mean_episode_reward)
-        if t % LOG_EVERY_N_STEPS == 0 and model_initialized:
+        if t % LOG_EVERY_N_STEPS == 0:
+            logger.scalar_summary('mean_episode_reward', mean_episode_reward, t)
+            logger.scalar_summary('best_mean_episode_reward', best_mean_episode_reward, t)
+            logger.scalar_summary('episodes', len(episode_rewards), t)
+            logger.scalar_summary('exploration', exploration.value(t), t)
+            logger.scalar_summary('learning_rate', lr_schedule.value(t), t)
             print("Timestep %d" % (t,))
             print("mean reward (100 episodes) %f" % mean_episode_reward)
             print("best mean reward %f" % best_mean_episode_reward)
             print("episodes %d" % len(episode_rewards))
             print("exploration %f" % exploration.value(t))
-            print("learning_rate %f" % optimizer_spec.lr_schedule.value(t))
+            print("learning_rate %f" % lr_schedule.value(t))
             sys.stdout.flush()
