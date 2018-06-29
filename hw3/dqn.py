@@ -7,6 +7,7 @@ import tensorflow                as tf
 import torch
 import torch.nn as nn
 import math
+from tqdm import tqdm
 
 sys.path.append("./../")
 from logger import Logger
@@ -210,7 +211,11 @@ def learn(env,
     last_obs = env.reset()
     LOG_EVERY_N_STEPS = 10000
 
+    pbar = tqdm(total=10000000)
+
     for t in itertools.count():
+        pbar.update(1)
+
         ### 1. Check stopping criterion
         if stopping_criterion is not None and stopping_criterion(env, t):
             break
@@ -366,3 +371,5 @@ def learn(env,
             print("exploration %f" % exploration.value(t))
             print("learning_rate %f" % lr_schedule.value(t))
             sys.stdout.flush()
+
+    pbar.close()

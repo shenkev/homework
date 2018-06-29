@@ -32,7 +32,7 @@ def atari_learn(env,
 
     exploration_schedule = PiecewiseSchedule(
         [
-            (0, 1.0),
+            (0, args.ep_start),
             (1e6, 0.1),
             (num_iterations / 2, 0.01),
         ], outside_value=0.01
@@ -44,14 +44,14 @@ def atari_learn(env,
         lr_schedule=lr_schedule,
         exploration=exploration_schedule,
         stopping_criterion=stopping_criterion,
-        replay_buffer_size=1000000,
-        batch_size=32,
-        gamma=0.99,
-        learning_starts=50000,
-        learning_freq=4,
-        frame_history_len=4,
-        target_update_freq=10000,
-        grad_norm_clipping=10
+        replay_buffer_size=args.buf_size,
+        batch_size=args.batch_size,
+        gamma=args.gamma,
+        learning_starts=args.learn_start,
+        learning_freq=args.learn_freq,
+        frame_history_len=args.frame_hist,
+        target_update_freq=args.targ_up_freq,
+        grad_norm_clipping=args.grad_clip
     )
     env.close()
 
@@ -105,6 +105,16 @@ def main():
     parser.add_argument('--max_pool', action='store_true')
     parser.add_argument('--doubleQ', action='store_true')
     parser.add_argument('--log_name', type=str, default='default')
+    parser.add_argument('--buf_size', type=int, default=1000000)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--learn_start', type=int, default=50000)
+    parser.add_argument('--learn_freq', type=int, default=4)
+    parser.add_argument('--frame_hist', type=int, default=4)
+    parser.add_argument('--targ_up_freq', type=int, default=10000)
+    parser.add_argument('--grad_clip', type=float, default=10.0)
+    parser.add_argument('--lr_multiplier', type=float, default=1.0)
+    parser.add_argument('--ep_start', type=float, default=1.0)
 
     args = parser.parse_args()
 
