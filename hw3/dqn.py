@@ -214,7 +214,8 @@ def learn(env,
     pbar = tqdm(total=10000000)
 
     for t in itertools.count():
-        pbar.update(1)
+        if t%100==0:
+            pbar.update(100)
 
         ### 1. Check stopping criterion
         if stopping_criterion is not None and stopping_criterion(env, t):
