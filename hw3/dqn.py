@@ -149,7 +149,7 @@ def learn(env,
     assert type(env.observation_space) == gym.spaces.Box
     assert type(env.action_space)      == gym.spaces.Discrete
 
-    logger = Logger('./logs/' + 'default')
+    logger = Logger('./logs/' + args.log_name)
 
     ###############
     # BUILD MODEL #
