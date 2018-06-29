@@ -103,6 +103,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--batch_norm', action='store_true')
     parser.add_argument('--max_pool', action='store_true')
+    parser.add_argument('--doubleQ', action='store_true')
+    parser.add_argument('--log_name', type=str, default='default')
 
     args = parser.parse_args()
 

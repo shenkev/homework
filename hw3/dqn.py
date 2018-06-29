@@ -328,7 +328,11 @@ def learn(env,
             pred_q_a = pred_q.gather(1, act.long().unsqueeze(1)).squeeze(1)
 
             target_q = target_net(next_obs)
-            target_q_a, _ = torch.max(target_q, dim=1)
+            if args.doubleQ:
+                _, argmax_q = torch.max(pred_q, dim=1)
+                target_q_a = target_q.gather(1, argmax_q.unsqueeze(1)).squeeze(1)
+            else:
+                target_q_a, _ = torch.max(target_q, dim=1)
             target = rew + (1-done_mask)*gamma*target_q_a
             target = target.detach()
 
